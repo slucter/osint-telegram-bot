@@ -790,9 +790,10 @@ async def search_regex(keyword: str, user_type: str, progress_callback) -> List[
         for attempt in range(max_retries):
             try:
                 # Convert wildcard pattern to regex pattern
-                regex_pattern = fnmatch.translate(keyword)
-                # Remove the ^ and $ from the pattern to allow partial matches
-                regex_pattern = regex_pattern[1:-1]
+                # Replace * with .* and ? with . for regex
+                regex_pattern = keyword.replace('.', '\\.')  # Escape dots
+                regex_pattern = regex_pattern.replace('*', '.*')  # Convert * to .*
+                regex_pattern = regex_pattern.replace('?', '.')   # Convert ? to .
                 
                 # Create search query
                 query = {
@@ -811,6 +812,7 @@ async def search_regex(keyword: str, user_type: str, progress_callback) -> List[
                 }
                 
                 logger.info(f"Starting regex search for pattern: {keyword}, user_type: {user_type}, attempt {attempt + 1}/{max_retries}")
+                logger.info(f"Converted regex pattern: {regex_pattern}")
                 
                 # First, get the total count
                 await progress_callback(
