@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 from dotenv import load_dotenv
 from fnmatch import fnmatch
+import json
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
@@ -113,33 +114,86 @@ async def search_elasticsearch(field: str, keyword: str, user_type: str, progres
     try:
         for attempt in range(max_retries):
             try:
-                # Create search query
-                query = {
-                    "query": {
-                        "bool": {
-                            "should": [
-                                {
-                                    "wildcard": {
-                                        "url": f"*{keyword}*"
+                # Create search query based on field
+                if field == 'all':
+                    query = {
+                        "query": {
+                            "bool": {
+                                "should": [
+                                    {
+                                        "wildcard": {
+                                            "url.keyword": {
+                                                "value": keyword
+                                            }
+                                        }
+                                    },
+                                    {
+                                        "wildcard": {
+                                            "url": {
+                                                "value": keyword
+                                            }
+                                        }
+                                    },
+                                    {
+                                        "wildcard": {
+                                            "username.keyword": {
+                                                "value": keyword
+                                            }
+                                        }
+                                    },
+                                    {
+                                        "wildcard": {
+                                            "username": {
+                                                "value": keyword
+                                            }
+                                        }
+                                    },
+                                    {
+                                        "wildcard": {
+                                            "password.keyword": {
+                                                "value": keyword
+                                            }
+                                        }
+                                    },
+                                    {
+                                        "wildcard": {
+                                            "password": {
+                                                "value": keyword
+                                            }
+                                        }
                                     }
-                                },
-                                {
-                                    "wildcard": {
-                                        "username": f"*{keyword}*"
-                                    }
-                                },
-                                {
-                                    "wildcard": {
-                                        "password": f"*{keyword}*"
-                                    }
-                                }
-                            ],
-                            "minimum_should_match": 1
+                                ],
+                                "minimum_should_match": 1
+                            }
                         }
                     }
-                }
+                else:
+                    query = {
+                        "query": {
+                            "bool": {
+                                "should": [
+                                    {
+                                        "wildcard": {
+                                            f"{field}.keyword": {
+                                                "value": keyword
+                                            }
+                                        }
+                                    },
+                                    {
+                                        "wildcard": {
+                                            field: {
+                                                "value": keyword
+                                            }
+                                        }
+                                    }
+                                ],
+                                "minimum_should_match": 1
+                            }
+                        }
+                    }
                 
-                logger.info(f"Starting search for keyword: {keyword}, user_type: {user_type}, attempt {attempt + 1}/{max_retries}")
+                logger.info(f"Starting search for keyword: {keyword}, field: {field}, user_type: {user_type}, attempt {attempt + 1}/{max_retries}")
+                logger.info(f"Using query: {json.dumps(query, indent=2)}")
                 
                 # First, get the total count
                 await progress_callback(
@@ -284,7 +338,8 @@ async def search_elasticsearch(field: str, keyword: str, user_type: str, progres
                             f"• Get 100% of results\n"
                             f"• No daily limits\n"
                             f"• Unlimited searches\n"
-                            f"• Contact: @xlcert"
+                            f"• Access to advanced search\n"
+                            f"Contact: @jefreybotax"
                         )
                     else:
                         await progress_callback(
@@ -394,15 +449,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user.type == 'free':
             welcome_message += (
                 "\n\nℹ️ Free User Limits:\n"
-                "• 15 searches per day\n"
+                "• 10 searches per day\n"
                 "• 40% of total results\n"
                 "• Maximum 100,000 rows per search\n\n"
                 "💎 Upgrade to Premium for:\n"
-                "• Unlimited searches\n"
-                "• 100% of results\n"
                 "• No daily limits\n"
+                "• Unlimited searches\n"
                 "• Access to advanced search\n"
-                "Contact: @xlcert"
+                "Contact: @jefreybotax"
             )
         
         await update.message.reply_text(welcome_message)
@@ -419,8 +473,8 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user.type == 'free':
             today = datetime.now().date()
             if user.last_search_date and user.last_search_date.date() == today:
-                if user.count_search >= 15:
-                    await update.message.reply_text("⚠️ Free users are limited to 15 searches per day.")
+                if user.count_search >= 10:
+                    await update.message.reply_text("⚠️ Free users are limited to 10 searches per day.")
                     return
             else:
                 user.count_search = 0
@@ -443,27 +497,71 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyword = query
         field = 'all'  # Default field when no specific field is provided
         
-        # Validate keyword length
+        # Validate keyword length and handle field specification
         if ':' in query:
-            field, keyword = query.split(':', 1)
-            if field not in ['url', 'username', 'password']:
-                await update.message.reply_text("❌ Invalid field. Use: url, username, or password")
-                return
-            if len(keyword.strip()) < 5:
+            # Split only on the first colon
+            parts = query.split(':', 1)
+            # Check if the first part is a valid field name
+            if parts[0].lower() in ['url', 'username', 'password']:
+                field = parts[0].lower()
+                keyword = parts[1]
+                # Check for invalid characters in keyword
+                if '*' in keyword:
+                    await update.message.reply_text(
+                        "❌ Invalid keyword!\n\n"
+                        "The keyword cannot contain wildcard characters (*).\n"
+                        "Example: /search username:admin123"
+                    )
+                    return
+                if len(keyword.strip()) < 5:
+                    await update.message.reply_text(
+                        "❌ Invalid keyword length!\n\n"
+                        "The keyword must be at least 5 characters long.\n"
+                        "Example: /search username:admin123"
+                    )
+                    return
+            else:
+                # If the first part is not a valid field name, treat the entire query as a keyword
+                field = 'all'
+                keyword = query
+                # Check for invalid characters in keyword
+                if '*' in keyword:
+                    await update.message.reply_text(
+                        "❌ Invalid keyword!\n\n"
+                        "The keyword cannot contain wildcard characters (*).\n"
+                        "Example: /search example.com"
+                    )
+                    return
+                if len(keyword.strip()) < 5:
+                    await update.message.reply_text(
+                        "❌ Invalid keyword length!\n\n"
+                        "The keyword must be at least 5 characters long.\n"
+                        "Example: /search example.com"
+                    )
+                    return
+        else:
+            # Check for invalid characters in keyword
+            if '*' in keyword:
                 await update.message.reply_text(
-                    "❌ Invalid keyword length!\n\n"
-                    "The keyword must be at least 5 characters long.\n"
-                    "Example: /search username:admin123"
+                    "❌ Invalid keyword!\n\n"
+                    "The keyword cannot contain wildcard characters (*).\n"
+                    "Example: /search example.com"
                 )
                 return
-        else:
-            if len(query.strip()) < 5:
+            if len(keyword.strip()) < 5:
                 await update.message.reply_text(
                     "❌ Invalid keyword length!\n\n"
                     "The keyword must be at least 5 characters long.\n"
                     "Example: /search example.com"
                 )
                 return
+
+        # Add * at start and end of keyword for wildcard search
+        keyword = keyword.strip()
+        if not keyword.startswith('*'):
+            keyword = '*' + keyword
+        if not keyword.endswith('*'):
+            keyword = keyword + '*'
 
         logger.info(f"User {user.user_id} ({user.type}) searching for {keyword} in field: {field}")
         
@@ -571,7 +669,7 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"📊 Total Results: {total_rows:,}\n"
                 f"⏱️ Search Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
                 f"👤 User Type: {user.type.upper()}\n"
-                f"📈 Search Count Today: {user.count_search}{'/' + str(15) if user.type == 'free' else ''}"
+                f"📈 Search Count Today: {user.count_search}{'/' + str(10) if user.type == 'free' else ''}"
             )
             
             await update.message.reply_text(completion_message)
@@ -580,10 +678,9 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if user.type == 'free':
                 subscription_info = (
                     "💎 Upgrade to Premium for:\n"
-                    "• Contact: @xlcert\n"
-                    "• Get 100% of results\n"
                     "• No daily limits\n"
-                    "• Unlimited searches\n\n"
+                    "• Unlimited searches\n"
+                    "• Contact: @jefreybotax\n\n"
                     "📅 Subscription Plans:\n"
                     "• 3 days: $4\n"
                     "• 1 week: $7\n"
@@ -591,7 +688,7 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "• 3 months: $50\n"
                     "• Lifetime: $100\n\n"
                     "ℹ️ Current Free User Limits:\n"
-                    "• 15 searches per day\n"
+                    "• 10 searches per day\n"
                     "• 40% of total results\n"
                     "• Maximum 100,000 rows per search"
                 )
@@ -784,7 +881,7 @@ async def users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         session.close()
 
-async def search_regex(keyword: str, user_type: str, progress_callback) -> List[Dict[str, Any]]:
+async def search_regex(keyword: str, user_type: str, progress_callback, query=None) -> List[Dict[str, Any]]:
     """Search using regex pattern matching"""
     max_retries = 3
     retry_delay = 5
@@ -793,30 +890,20 @@ async def search_regex(keyword: str, user_type: str, progress_callback) -> List[
     try:
         for attempt in range(max_retries):
             try:
-                # Convert wildcard pattern to regex pattern
-                # Replace * with .* and ? with . for regex
-                regex_pattern = keyword.replace('.', '\\.')  # Escape dots
-                regex_pattern = regex_pattern.replace('*', '.*')  # Convert * to .*
-                regex_pattern = regex_pattern.replace('?', '.')   # Convert ? to .
-                
-                # Create search query
-                query = {
-                    "query": {
-                        "bool": {
-                            "should": [
-                                {
-                                    "regexp": {
-                                        "url": regex_pattern
-                                    }
+                # Use the provided query if available, otherwise create a default one
+                if not query:
+                    query = {
+                        "query": {
+                            "wildcard": {
+                                "url.keyword": {
+                                    "value": keyword
                                 }
-                            ],
-                            "minimum_should_match": 1
+                            }
                         }
                     }
-                }
                 
                 logger.info(f"Starting regex search for pattern: {keyword}, user_type: {user_type}, attempt {attempt + 1}/{max_retries}")
-                logger.info(f"Converted regex pattern: {regex_pattern}")
+                logger.info(f"Using query: {json.dumps(query, indent=2)}")
                 
                 # First, get the total count
                 await progress_callback(
@@ -940,7 +1027,8 @@ async def search_regex(keyword: str, user_type: str, progress_callback) -> List[
                             f"• Get 100% of results\n"
                             f"• No daily limits\n"
                             f"• Unlimited searches\n"
-                            f"• Contact: @xlcert"
+                            f"• Access to advanced search\n"
+                            f"Contact: @jefreybotax"
                         )
                     else:
                         await progress_callback(
@@ -990,17 +1078,11 @@ async def sregex(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(
                 "❌ This command is only available for premium users!\n\n"
                 "💎 Upgrade to Premium for:\n"
-                "• Access to advanced search patterns\n"
                 "• Get 100% of results\n"
                 "• No daily limits\n"
-                "• Unlimited searches\n\n"
-                "📅 Subscription Plans:\n"
-                "• 3 days: $4\n"
-                "• 1 week: $7\n"
-                "• 1 month: $20\n"
-                "• 3 months: $50\n"
-                "• Lifetime: $100\n\n"
-                "Contact: @xlcert"
+                "• Unlimited searches\n"
+                "• Access to advanced search\n"
+                "Contact: @jefreybotax"
             )
             return
         
@@ -1008,12 +1090,14 @@ async def sregex(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not context.args:
             await update.message.reply_text(
                 "❌ Please provide a search pattern!\n\n"
-                "Usage: /sregex <pattern>\n\n"
+                "Usage:\n"
+                "• /sregex <field>:<pattern>\n"
+                "• /sregex <pattern>\n\n"
                 "Examples:\n"
+                "• /sregex url:*create-vpn-howdy*\n"
+                "• /sregex username:*admin*\n"
                 "• /sregex *-*.go.id\n"
-                "• /sregex *.*.go.*\n"
-                "• /sregex *.com\n"
-                "• /sregex *example*\n\n"
+                "• /sregex *.*.go.*\n\n"
                 "💡 Tips:\n"
                 "• Use * for any characters\n"
                 "• Use ? for single character\n"
@@ -1022,7 +1106,28 @@ async def sregex(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         
-        pattern = ' '.join(context.args)
+        # Initialize pattern and field
+        query = ' '.join(context.args)
+        pattern = query
+        field = 'all'
+        
+        # Handle field-specific search
+        if ':' in query:
+            parts = query.split(':', 1)
+            if parts[0].lower() in ['url', 'username', 'password']:
+                field = parts[0].lower()
+                pattern = parts[1]
+            else:
+                # If invalid field, treat as all-field search
+                field = 'all'
+                pattern = query
+        
+        # Ensure pattern has * at start and end if not present
+        pattern = pattern.strip()
+        if not pattern.startswith('*'):
+            pattern = '*' + pattern
+        if not pattern.endswith('*'):
+            pattern = pattern + '*'
         
         # Validate pattern length (excluding wildcards)
         clean_pattern = pattern.replace('*', '').replace('?', '').strip()
@@ -1031,9 +1136,9 @@ async def sregex(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "❌ Invalid pattern length!\n\n"
                 "The pattern must contain at least 5 characters (excluding wildcards).\n\n"
                 "Examples of valid patterns:\n"
+                "• /sregex url:*create-vpn-howdy*\n"
+                "• /sregex username:*admin*\n"
                 "• /sregex *-*.go.id\n"
-                "• /sregex *.*.go.*\n"
-                "• /sregex *example.com*\n"
                 "• /sregex *domain*.com"
             )
             return
@@ -1042,6 +1147,7 @@ async def sregex(update: Update, context: ContextTypes.DEFAULT_TYPE):
         progress_message = await update.message.reply_text(
             f"🚀 Starting advanced pattern search...\n\n"
             f"🔍 Pattern: {pattern}\n"
+            f"📑 Field: {field}\n"
             f"👤 User: {user.type.upper()}\n"
             f"⏱️ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
             f"📊 Please wait while we process your request..."
@@ -1052,6 +1158,7 @@ async def sregex(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await progress_message.edit_text(
                     f"🚀 Advanced Pattern Search\n\n"
                     f"🔍 Pattern: {pattern}\n"
+                    f"📑 Field: {field}\n"
                     f"👤 User: {user.type.upper()}\n"
                     f"⏱️ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
                     f"{message}"
@@ -1060,8 +1167,51 @@ async def sregex(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.error(f"Error updating progress message: {str(e)}", exc_info=True)
         
         try:
+            # Create search query based on field
+            if field == 'all':
+                query = {
+                    "query": {
+                        "bool": {
+                            "should": [
+                                {
+                                    "wildcard": {
+                                        "url.keyword": {
+                                            "value": pattern
+                                        }
+                                    }
+                                },
+                                {
+                                    "wildcard": {
+                                        "username.keyword": {
+                                            "value": pattern
+                                        }
+                                    }
+                                },
+                                {
+                                    "wildcard": {
+                                        "password.keyword": {
+                                            "value": pattern
+                                        }
+                                    }
+                                }
+                            ],
+                            "minimum_should_match": 1
+                        }
+                    }
+                }
+            else:
+                query = {
+                    "query": {
+                        "wildcard": {
+                            f"{field}.keyword": {
+                                "value": pattern
+                            }
+                        }
+                    }
+                }
+            
             # Perform search
-            results = await search_regex(pattern, user.type, update_progress)
+            results = await search_regex(pattern, user.type, update_progress, query)
             
             if not results:
                 await update.message.reply_text(
@@ -1109,7 +1259,7 @@ async def sregex(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     end_idx = min((i + 1) * max_rows, total_rows)
                     part_results = results[start_idx:end_idx]
                     
-                    part_header = f"_TFROB.ID_\nDate Search: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\nPattern: {pattern}\nPart: {i+1}/{parts}\nTotal result: {len(part_results)}\n\n"
+                    part_header = f"_TFROB.ID_\nDate Search: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\nPattern: {pattern}\nField: {field}\nPart: {i+1}/{parts}\nTotal result: {len(part_results)}\n\n"
                     part_content = part_header + "\n".join([f"{r.get('url', '')}:{r.get('username', '')}:{r.get('password', '')}" for r in part_results])
                     
                     part_filepath = await create_result_file(part_content, f"regex_{pattern}_part{i+1}")
@@ -1145,6 +1295,7 @@ async def sregex(update: Update, context: ContextTypes.DEFAULT_TYPE):
             completion_message = (
                 f"✨ Advanced Search Results\n\n"
                 f"🔍 Pattern: {pattern}\n"
+                f"📑 Field: {field}\n"
                 f"📊 Total Results: {total_rows:,}\n"
                 f"⏱️ Search Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
                 f"👤 User Type: {user.type.upper()}\n"
