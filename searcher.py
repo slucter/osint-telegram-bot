@@ -58,7 +58,20 @@ class User(Base):
     start_date_premium = Column(DateTime, nullable=True)
     end_date_premium = Column(DateTime, nullable=True)
 
-# Create tables
+class LogChat(Base):
+    __tablename__ = 'log_chat'
+    
+    id = Column(Integer, primary_key=True)
+    keyword = Column(String)
+    user_id = Column(Integer)
+    username = Column(String)
+    user_type = Column(String)
+    command = Column(String)
+    search_date = Column(DateTime, default=datetime.now)
+    total_results = Column(Integer, default=0)
+
+# Drop existing tables and recreate them
+Base.metadata.drop_all(engine)
 Base.metadata.create_all(engine)
 
 # Initialize Elasticsearch client with better timeout settings
@@ -463,6 +476,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         session.close()
 
+async def log_search(user: User, keyword: str, command: str, total_results: int):
+    """Log search activity to database"""
+    session = Session()
+    try:
+        log = LogChat(
+            keyword=keyword,
+            user_id=user.user_id,
+            username=user.username,
+            user_type=user.type,
+            command=command,
+            search_date=datetime.now(),
+            total_results=total_results
+        )
+        session.add(log)
+        session.commit()
+    except Exception as e:
+        logger.error(f"Error logging search: {str(e)}", exc_info=True)
+    finally:
+        session.close()
+
 async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user, session = await get_or_create_user(update.effective_user.id, update.effective_user.username)
     try:
@@ -591,6 +624,9 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not results:
                 await update.message.reply_text("❌ No results found for your search query.")
                 return
+            
+            # Log the search with total results
+            await log_search(user, keyword, '/search', len(results))
             
             # Update user stats
             user.count_search += 1
@@ -821,56 +857,83 @@ async def users(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total_searches = sum(u.count_search for u in users)
         blocked_users = sum(1 for u in users if u.is_blocked)
         
-        # Create header with statistics
-        header = (
-            f"📊 User Statistics - {user_type.upper()}\n"
-            f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-            f"📈 Overview:\n"
-            f"• Total Users: {total_users}\n"
-            f"• Active Today: {active_today}\n"
-            f"• Total Searches: {total_searches}\n"
-            f"• Blocked Users: {blocked_users}\n\n"
-            f"👥 User Details:\n"
-        )
+        # Create file content
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        content = f"📊 TFROB User Statistics\n"
+        content += f"📅 Generated: {timestamp}\n"
+        content += f"👥 User Type: {user_type.upper()}\n"
+        content += "=" * 50 + "\n\n"
         
-        # Process users in chunks to avoid message length limits
-        chunk_size = 10
-        for i in range(0, len(users), chunk_size):
-            chunk = users[i:i + chunk_size]
-            message = header if i == 0 else ""
+        # Add statistics
+        content += f"📈 Overview\n"
+        content += f"• Total Users: {total_users:,}\n"
+        content += f"• Active Today: {active_today:,}\n"
+        content += f"• Total Searches: {total_searches:,}\n"
+        content += f"• Blocked Users: {blocked_users:,}\n"
+        content += "=" * 50 + "\n\n"
+        
+        # Add user details
+        content += f"👥 User Details\n"
+        content += "-" * 50 + "\n\n"
+        
+        for i, u in enumerate(users, 1):
+            # Calculate time since last search
+            last_search = "Never" if not u.last_search_date else format_timedelta(datetime.now() - u.last_search_date) + " ago"
             
-            for j, u in enumerate(chunk, i + 1):
-                # Calculate time since last search
-                last_search = "Never" if not u.last_search_date else format_timedelta(datetime.now() - u.last_search_date) + " ago"
-                
-                # Format premium period if applicable
-                premium_info = ""
-                if u.type == 'premium' and u.start_date_premium and u.end_date_premium:
-                    days_left = (u.end_date_premium - datetime.now()).days
-                    premium_info = (
-                        f"\n   💎 Premium Status:\n"
-                        f"   • Start: {u.start_date_premium.strftime('%Y-%m-%d')}\n"
-                        f"   • End: {u.end_date_premium.strftime('%Y-%m-%d')}\n"
-                        f"   • Days Left: {days_left}"
-                    )
-                
-                # Format user status
-                status = "🚫 Blocked" if u.is_blocked else "✅ Active"
-                
-                message += (
-                    f"{j}. User ID: {u.user_id}\n"
-                    f"   👤 Username: @{u.username if u.username else 'N/A'}\n"
-                    f"   🏷️ Type: {u.type.upper()}\n"
-                    f"   📊 Searches: {u.count_search}\n"
-                    f"   ⏱️ Last Search: {last_search}\n"
-                    f"   {status}{premium_info}\n\n"
+            # Format premium period if applicable
+            premium_info = ""
+            if u.type == 'premium' and u.start_date_premium and u.end_date_premium:
+                days_left = (u.end_date_premium - datetime.now()).days
+                premium_info = (
+                    f"   💎 Premium Status:\n"
+                    f"   • Start: {u.start_date_premium.strftime('%Y-%m-%d')}\n"
+                    f"   • End: {u.end_date_premium.strftime('%Y-%m-%d')}\n"
+                    f"   • Days Left: {days_left}\n"
                 )
             
-            # Add footer for chunks
-            if i + chunk_size < len(users):
-                message += f"📄 Page {(i//chunk_size) + 1} of {(len(users)-1)//chunk_size + 1}\n"
+            # Format user status
+            status = "🚫 Blocked" if u.is_blocked else "✅ Active"
             
-            await update.message.reply_text(message)
+            content += f"{i}. User ID: {u.user_id}\n"
+            content += f"   👤 Username: @{u.username if u.username else 'N/A'}\n"
+            content += f"   🏷️ Type: {u.type.upper()}\n"
+            content += f"   📊 Searches: {u.count_search:,}\n"
+            content += f"   ⏱️ Last Search: {last_search}\n"
+            content += f"   {status}\n"
+            if premium_info:
+                content += premium_info
+            content += "-" * 30 + "\n\n"
+        
+        # Create file
+        filename = f"TFROB_Users_{user_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        filepath = os.path.join(tempfile.gettempdir(), filename)
+        
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(content)
+        
+        # Send file
+        try:
+            with open(filepath, 'rb') as f:
+                caption = (
+                    f"📊 TFROB User Statistics\n\n"
+                    f"📅 Generated: {timestamp}\n"
+                    f"👥 User Type: {user_type.upper()}\n"
+                    f"📈 Total Users: {total_users:,}\n"
+                    f"✅ Active Today: {active_today:,}\n"
+                    f"🚫 Blocked Users: {blocked_users:,}"
+                )
+                
+                await update.message.reply_document(
+                    document=f,
+                    filename=filename,
+                    caption=caption
+                )
+        except Exception as e:
+            logger.error(f"Error sending user file: {str(e)}", exc_info=True)
+            await update.message.reply_text(f"❌ Error sending user file: {str(e)}")
+        finally:
+            if os.path.exists(filepath):
+                os.remove(filepath)
             
     except Exception as e:
         logger.error(f"Error in users command: {str(e)}", exc_info=True)
@@ -1223,6 +1286,9 @@ async def sregex(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
             
+            # Log the search with total results
+            await log_search(user, pattern, '/sregex', len(results))
+            
             # Update user stats
             user.count_search += 1
             user.last_search_date = datetime.now()
@@ -1387,6 +1453,121 @@ async def deleteuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         session.close()
 
+async def logchat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /logchat command to display search logs"""
+    user, session = await get_or_create_user(update.effective_user.id, update.effective_user.username)
+    try:
+        if not user or user.type != 'superuser':
+            await update.message.reply_text("❌ This command is only available for superusers.")
+            return
+        
+        # Get target user_id if provided
+        target_user_id = None
+        if context.args and len(context.args) == 1:
+            try:
+                target_user_id = int(context.args[0])
+            except ValueError:
+                await update.message.reply_text("❌ Invalid user ID. Please provide a valid number.")
+                return
+        
+        # Query logs
+        query = session.query(LogChat)
+        if target_user_id:
+            query = query.filter_by(user_id=target_user_id)
+        
+        # Order by search_date descending
+        logs = query.order_by(LogChat.search_date.desc()).all()
+        
+        if not logs:
+            message = "No logs found" if target_user_id else "No search logs found in the database."
+            await update.message.reply_text(message)
+            return
+        
+        # Create file content
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        content = f"📊 TFROB Search Logs\n"
+        content += f"📅 Generated: {timestamp}\n"
+        content += f"📈 Total Logs: {len(logs):,}\n"
+        content += "=" * 50 + "\n\n"
+        
+        # Group logs by user_id
+        user_logs = {}
+        for log in logs:
+            if log.user_id not in user_logs:
+                user_logs[log.user_id] = {
+                    'username': log.username,
+                    'user_type': log.user_type,
+                    'logs': []
+                }
+            user_logs[log.user_id]['logs'].append(log)
+        
+        # Sort users by total logs
+        sorted_users = sorted(
+            user_logs.items(),
+            key=lambda x: len(x[1]['logs']),
+            reverse=True
+        )
+        
+        # Generate content for each user
+        for user_id, user_data in sorted_users:
+            logs = user_data['logs']
+            content += f"👤 User Information\n"
+            content += f"• ID: {user_id}\n"
+            content += f"• Username: @{user_data['username']}\n"
+            content += f"• Type: {user_data['user_type'].upper()}\n"
+            content += f"• Total Searches: {len(logs):,}\n"
+            content += "-" * 50 + "\n\n"
+            
+            # Add logs for this user
+            for log in logs:
+                search_date = log.search_date.strftime("%Y-%m-%d %H:%M:%S")
+                content += f"🔍 Search #{log.id}\n"
+                content += f"• Keyword: {log.keyword}\n"
+                content += f"• Command: {log.command}\n"
+                content += f"• Results: {log.total_results:,}\n"
+                content += f"• Date: {search_date}\n"
+                content += "-" * 30 + "\n\n"
+            
+            content += "=" * 50 + "\n\n"
+        
+        # Create file
+        filename = f"TFROB_Logs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        filepath = os.path.join(tempfile.gettempdir(), filename)
+        
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(content)
+        
+        # Send file
+        try:
+            with open(filepath, 'rb') as f:
+                caption = (
+                    f"📊 TFROB Search Logs\n\n"
+                    f"📅 Generated: {timestamp}\n"
+                    f"📈 Total Logs: {len(logs):,}\n"
+                    f"👥 Total Users: {len(user_logs):,}"
+                )
+                
+                await update.message.reply_document(
+                    document=f,
+                    filename=filename,
+                    caption=caption
+                )
+        except Exception as e:
+            logger.error(f"Error sending log file: {str(e)}", exc_info=True)
+            await update.message.reply_text(f"❌ Error sending log file: {str(e)}")
+        finally:
+            if os.path.exists(filepath):
+                os.remove(filepath)
+                
+    except Exception as e:
+        logger.error(f"Error in logchat command: {str(e)}", exc_info=True)
+        await update.message.reply_text(
+            "❌ An error occurred while fetching logs.\n"
+            "Please try again later."
+        )
+    finally:
+        session.close()
+
 def main():
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     
@@ -1398,6 +1579,7 @@ def main():
     application.add_handler(CommandHandler("blockuser", blockuser))
     application.add_handler(CommandHandler("deleteuser", deleteuser))
     application.add_handler(CommandHandler("users", users))
+    application.add_handler(CommandHandler("logchat", logchat))
     
     # Start the bot
     application.run_polling()
