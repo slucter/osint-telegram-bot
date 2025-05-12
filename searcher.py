@@ -439,6 +439,10 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         
+        # Initialize keyword and field with default values
+        keyword = query
+        field = 'all'  # Default field when no specific field is provided
+        
         # Validate keyword length
         if ':' in query:
             field, keyword = query.split(':', 1)
@@ -461,7 +465,7 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
 
-        logger.info(f"User {user.user_id} ({user.type}) searching for {keyword}")
+        logger.info(f"User {user.user_id} ({user.type}) searching for {keyword} in field: {field}")
         
         # Send initial progress message
         progress_message = await update.message.reply_text(

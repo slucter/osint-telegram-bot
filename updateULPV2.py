@@ -171,29 +171,57 @@ def print_entry(entry, count, es_status=None):
 {'✅ Elasticsearch: ' + es_status if es_status else ''}
 """)
 
+def crawl_directory(target_dir):
+    """Recursively yield all file paths in the given directory."""
+    for root, dirs, files in os.walk(target_dir):
+        for file in files:
+            yield os.path.join(root, file)
+
 def main():
-    parser = argparse.ArgumentParser(description='Parse URL:USER:PASS from a file')
-    parser.add_argument('file', help='Path to the file containing credentials')
+    parser = argparse.ArgumentParser(description='Parse URL:USER:PASS from a file or all files in a directory')
+    parser.add_argument('target', help='Path to the file or directory containing credentials')
     args = parser.parse_args()
     
-    try:
-        with open(args.file, 'r') as file:
-            valid_count = 0
-            for line_number, line in enumerate(file, start=1):
-                entry = parse_credentials(line, line_number, args.file)
-                if entry:
-                    valid_count += 1
-                    # Push to Elasticsearch
-                    success, message = push_to_elasticsearch(entry)
-                    print_entry(entry, valid_count, message if success else f"❌ {message}")
-                    
+    valid_count = 0
+    total_files = 0
+    
+    if os.path.isdir(args.target):
+        print(f"📁 Crawling directory: {args.target}")
+        file_list = list(crawl_directory(args.target))
+        print(f"🔍 Found {len(file_list)} files to process.")
+        for file_path in file_list:
+            total_files += 1
+            try:
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as file:
+                    for line_number, line in enumerate(file, start=1):
+                        entry = parse_credentials(line, line_number, file_path)
+                        if entry:
+                            valid_count += 1
+                            # Push to Elasticsearch
+                            success, message = push_to_elasticsearch(entry)
+                            print_entry(entry, valid_count, message if success else f"❌ {message}")
+            except Exception as e:
+                print(f"❌ Error reading file {file_path}: {str(e)}")
+        print(f"✅ Total valid entries found: {valid_count} in {total_files} files.")
+    elif os.path.isfile(args.target):
+        try:
+            with open(args.target, 'r', encoding='utf-8', errors='ignore') as file:
+                for line_number, line in enumerate(file, start=1):
+                    entry = parse_credentials(line, line_number, args.target)
+                    if entry:
+                        valid_count += 1
+                        # Push to Elasticsearch
+                        success, message = push_to_elasticsearch(entry)
+                        print_entry(entry, valid_count, message if success else f"❌ {message}")
             print(f"✅ Total valid entries found: {valid_count}")
-            
-    except FileNotFoundError:
-        print(f"❌ Error: File '{args.file}' not found.")
-        sys.exit(1)
-    except Exception as e:
-        print(f"❌ An error occurred: {str(e)}")
+        except FileNotFoundError:
+            print(f"❌ Error: File '{args.target}' not found.")
+            sys.exit(1)
+        except Exception as e:
+            print(f"❌ An error occurred: {str(e)}")
+            sys.exit(1)
+    else:
+        print(f"❌ Error: '{args.target}' is not a valid file or directory.")
         sys.exit(1)
 
 if __name__ == "__main__":
