@@ -1,4 +1,4 @@
-# TFROB Search Bot
+# OSINTBOTTELE Search Bot
 
 > ⚠️ **DISCLAIMER**: This project is created for educational purposes only. The bot is designed to demonstrate concepts of:
 > - Elasticsearch integration
@@ -12,7 +12,7 @@
 
 ## Overview
 
-TFROB Search Bot is a Telegram bot that demonstrates the implementation of a search system using Elasticsearch as the backend database. The bot provides functionality to search through indexed credentials with different user access levels and features.
+OSINTBOTTELE Search Bot is a Telegram bot that demonstrates the implementation of a search system using Elasticsearch as the backend database. The bot provides functionality to search through indexed credentials with different user access levels and features.
 
 ## Features
 
@@ -45,7 +45,7 @@ TFROB Search Bot is a Telegram bot that demonstrates the implementation of a sea
 ## Project Structure
 
 ```
-TFROB/
+OSINTBOTTELE/
 ├── updateULPV2.py    # Credential parser and indexer
 ├── searcher.py       # Main bot implementation
 ├── parserULP.py      # Additional parsing utilities
@@ -148,7 +148,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ## Contact
 
 For educational inquiries or questions about the implementation:
-- Telegram: @xlcert
+- Telegram: @babiloniaz
 
 ---
 
